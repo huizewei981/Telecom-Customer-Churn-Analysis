@@ -1,0 +1,189 @@
+---
+title: "Telecom Customer Churn Analysis"
+output: pdf_document
+---
+1. Data Preparation.
+```{r}
+rm(list=ls())
+library(readxl)
+library(Hmisc)
+library(MASS)
+library(caret)
+library(regclass)
+library(ISLR)
+library(boot)
+library(vcd)
+library(pROC)
+library (ROCR)
+data<-na.omit(read.csv("~/Desktop/HW/401/final project/WA_Fn-UseC_-Telco-Customer-Churn.csv"))
+```
+1) Variable Transformation.
+```{r}
+data$gender<-ifelse(data$gender=='Female',1,0)
+data$Partner<-ifelse(data$Partner=='Yes',1,0)
+data$Dependents<-ifelse(data$Dependents=='Yes',1,0)
+data$PhoneService<-ifelse(data$PhoneService=='Yes',1,0)
+data$PaperlessBilling<-ifelse(data$PaperlessBilling=='Yes',1,0)
+data$Churn<-ifelse(data$Churn=='Yes',1,0)
+data$MultipleLines<-ifelse(data$MultipleLines=='Yes',1,0)
+data$OnlineSecurity<-ifelse(data$OnlineSecurity=='Yes',1,0)
+data$OnlineBackup<-ifelse(data$OnlineBackup=='Yes',1,0)
+data$DeviceProtection<-ifelse(data$DeviceProtection=='Yes',1,0)
+data$TechSupport<-ifelse(data$TechSupport=='Yes',1,0)
+data$StreamingTV<-ifelse(data$StreamingTV=='Yes',1,0)
+data$StreamingMovies<-ifelse(data$StreamingMovies=='Yes',1,0)
+data$EC<-ifelse(data$PaymentMethod=='Electronic check',1,0)
+data$MC<-ifelse(data$PaymentMethod=='Mailed check',1,0)
+data$BT<-ifelse(data$PaymentMethod=='Bank transfer (automatic)',1,0)
+data$CC<-ifelse(data$PaymentMethod=='Credit card (automatic)',1,0 )
+data$mtm<-ifelse(data$Contract=='Month-to-month',1,0)
+data$oy<-ifelse(data$Contract=='One year',1,0)
+data$ty<-ifelse(data$Contract=='Two year',1,0)
+data$DSL<-ifelse(data$InternetService=='DSL',1,0)
+data$FO<-ifelse(data$InternetService=='Fiber optic',1,0)
+```
+2) Clean Data.
+```{r}
+clean<-data[c(1,2,3,4,5,6,7,8,10,11,12,13,14,15,17,19,20,21,22,23,24,25,26,27,28,29,30)]
+```
+2. Feature Selection & Engineering.
+```{r}
+library(reshape2)
+cormat<-cor(clean[2:27])
+melted_cormat <- melt(cormat)
+library(ggplot2)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()
+```
+For reliable interpretation of explanatory variables, Total Charge, Credit Card Payment dummy, Two Year Contract dummy and  Fiber Optic dummy variables are excluded from the model.
+3. Logistic Regression.
+1). No train-test split.
+```{r}
+churn_logit<-glm(Churn~ gender+SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+OnlineSecurity+OnlineBackup+
+                   DeviceProtection+TechSupport+StreamingTV+StreamingMovies+PaperlessBilling+
+                   MonthlyCharges+EC+MC+BT+mtm+oy+DSL+StreamingTV:StreamingMovies,data=clean,family=binomial(link="logit"))
+summary(churn_logit) 
+car::vif(churn_logit)
+preddata<-with(clean,data.frame(customerID,gender,SeniorCitizen,Partner,Dependents,tenure,PhoneService,MultipleLines,OnlineSecurity,OnlineBackup,DeviceProtection,TechSupport,StreamingTV, StreamingMovies, PaperlessBilling, MonthlyCharges, TotalCharges, Churn, EC,MC,BT,CC,mtm,oy,ty,DSL,FO))
+probchurn<-predict(churn_logit,newdata=preddata,type="response")
+preddefault<-ifelse(probchurn > 0.5, 1,0)
+clean$probchurn<-probchurn
+confusionMatrix(data = as.factor(preddefault),reference = as.factor(clean$Churn),positive = "1")
+roc(clean$Churn,churn_logit$fitted.values, plot=TRUE)
+par(pty="s")
+roc(clean$Churn,churn_logit$fitted.values, plot=TRUE, legacy.axes=TRUE, percent=TRUE, xlab="FP Rate", ylab="TP Rate",print.auc=TRUE)
+```
+
+
+2). Train Test Split.
+```{r}
+set.seed(20)
+sample_siz = floor(0.75*nrow(clean))  
+train_index = sample(seq_len(nrow(clean)),size = sample_siz)
+train=clean[train_index,] 
+test=clean[-train_index,] 
+mylogit_train<-glm(Churn~ gender+SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+OnlineSecurity+OnlineBackup+
+                   DeviceProtection+TechSupport+StreamingTV+StreamingMovies+PaperlessBilling+
+                   MonthlyCharges+EC+MC+BT+mtm+oy+DSL+StreamingTV:StreamingMovies,data=train,family=binomial(link="logit"))
+summary(mylogit_train) 
+preddata_test_lr<-with(test,data.frame(customerID,gender,SeniorCitizen,Partner,Dependents,tenure,PhoneService,MultipleLines,OnlineSecurity,OnlineBackup,DeviceProtection,TechSupport,StreamingTV, StreamingMovies, PaperlessBilling, MonthlyCharges, TotalCharges, Churn, EC,MC,BT,CC,mtm,oy,ty,DSL,FO))
+probdefault_test_lr<-predict(mylogit_train,newdata=preddata_test_lr,type="response")
+preddefault_test_lr<-ifelse(probdefault_test_lr > 0.5, 1,0) #at what level should we say prob(default)=1
+confusionMatrix(data = as.factor(preddefault_test_lr),reference = as.factor(test$Churn),positive = "1")
+library(pROC)
+ROC_lr<- roc(test$Churn, probdefault_test_lr)
+ROC_lr_auc <- auc(ROC_lr)
+plot(ROC_lr, col = "green", main = "ROC For Logistic Regression")
+paste("Accuracy % of logistic regression: ", mean(test$Churn == preddefault_test_lr))
+paste("Area under curve of logistic regression: ", ROC_lr_auc)
+roc(test$Churn,probdefault_test_lr, plot=TRUE, legacy.axes=TRUE, percent=TRUE, xlab="FP Rate", ylab="TP Rate",print.auc=TRUE)
+```
+3).K-Fold Cross Validation for Logistic Regression.
+```{r}
+set.seed(20)
+cv.error.10=rep(0 ,10)
+for (i in 1:10){
+  glm.fit=glm(Churn~ gender+SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+OnlineSecurity+OnlineBackup+
+                   DeviceProtection+TechSupport+StreamingTV+StreamingMovies+PaperlessBilling+
+                   MonthlyCharges+EC+MC+BT+mtm+oy+DSL+StreamingTV:StreamingMovies,data=clean,family=binomial(link="logit"))
+  cv.error.10[i]=cv.glm(clean,glm.fit,K=10)$delta[1]
+}
+cv.error.10
+```
+
+3). Interpret the Logistic Regression Model.
+```{r}
+oddsr=round(exp(cbind(OddsRatio=coef(churn_logit),confint(churn_logit))),4)
+oddsr
+```
+
+
+
+
+2. Random Forest.
+```{r}
+library(randomForest)
+rf_model <- randomForest(as.factor(Churn) ~gender+SeniorCitizen+Partner+Dependents+tenure+PhoneService+MultipleLines+OnlineSecurity+OnlineBackup+
+                   DeviceProtection+TechSupport+StreamingTV+StreamingMovies+PaperlessBilling+
+                   MonthlyCharges+EC+MC+BT+mtm+oy+DSL+StreamingTV:StreamingMovies, data = train)
+rf_prediction <- predict(rf_model, test, type = "prob")
+preddefault_test_rf<-ifelse(rf_prediction[,2]> 0.5, 1,0) #at what level should we say prob(default)=1
+library(pROC)
+ROC_rf <- roc(test$Churn, rf_prediction[,2])
+ROC_rf_auc <- auc(ROC_rf)
+plot(ROC_rf, col = "green", main = "ROC For Random Forest (GREEN) vs Logistic Regression (RED)")
+lines(ROC_lr, col = "red")
+paste("Accuracy % of random forest: ", mean(test$Churn == preddefault_test_rf))
+paste("Accuracy % of logistic regression: ",mean(test$Churn == preddefault_test_lr))
+paste("Area under curve of random forest: ", ROC_rf_auc)
+paste("Area under curve of logistic regression: ", ROC_lr_auc)
+```
+3. CLV Based on Logistic Regression.
+1) CLV.
+```{r}
+clean$customer_life<-(1/clean$probchurn)
+clean$retention_rate<-(1-clean$probchurn)
+clean$margin<-clean$MonthlyCharges*0.17
+clv_function<-function(x,y,k) {
+sum=0
+n = 1
+while (n <= round(x,digits =0)) {
+num<-k*(y*1/(1+0.08/12))^n
+sum<-sum+num
+n = n + 1
+return(sum)
+}
+}
+result <- data.frame(matrix(nrow = nrow(clean), ncol = 1))
+colnames(result) <- c("CLV")
+for(i in 1:7032) {
+ result[i,1]<-clv_function(clean[i,29],clean[i,30],clean[i,31])
+}
+clean<-cbind(clean,result)
+```
+
+2). Churn Probability Reduced by Adopting Interventions.
+```{r}
+most_at_risk<-subset(clean, clean$probchurn>0.5)
+negative_synergy<-subset(most_at_risk,most_at_risk$StreamingMovies==1 & most_at_risk$StreamingTV==1)
+paperless_billing<-subset(most_at_risk,most_at_risk$PaperlessBilling==1)
+log_synergy<-1/(1+exp(0.35))
+log_auto<-1/(1+exp(0.34))
+negative_synergy$newchurn<-negative_synergy$probchurn-log_synergy
+paperless_billing$newchurn<-paperless_billing$probchurn-log_auto
+```
+3). Business Value Added by Adopting Interventions.
+
+```{r}
+new<-rbind(negative_synergy,paperless_billing)
+nrow(new)
+new$newret<-1-new$newchurn
+result_new <- data.frame(matrix(nrow = nrow(new), ncol = 1))
+colnames(result_new) <- "New CLV"
+for(i in 1:1810) {
+ result_new[i,1]<-clv_function(new[i,29],new[i,34],new[i,31])
+}
+sum(result_new-new$CLV)
+```
+
+
